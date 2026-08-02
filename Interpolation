@@ -1,0 +1,623 @@
+import requests
+from bs4 import BeautifulSoup
+import time
+import re
+import pandas as pd
+from sympy import symbols
+import numpy as np
+import math
+import concurrent.futures
+from pathlib import Path
+import threading
+import schedule
+from datetime import datetime, timedelta,timezone
+
+url="https://meteo.gr/cf.cfm?city_id=89"
+
+def get_requests(url):
+    trials=0
+    while trials<=5:
+        try:
+            req = requests.get(url)
+
+            if req.status_code >= 200 and req.status_code <= 299:
+                print(f"The status code is {req.status_code} so the request has been accepted\n")
+                return req
+            elif req.status_code >= 100 and req.status_code <= 199:
+                print(f"The status code is {req.status_code} so the request continues under consideration\n")
+            elif req.status_code >= 300 and req.status_code <= 399:
+                print(f"The status code is {req.status_code} so the request is transferred to another url\n")
+            elif req.status_code >= 400 and req.status_code <= 499:
+                print(
+                    f"The status code is {req.status_code} so you made something wrong with the request. Please try again again!\n")
+            else:
+                print(f"The status code is {req.status_code} so the fault is of the site\n")
+        except requests.exceptions.ConnectionError:
+            print(f"Connection Error with trials left {trials}\n")
+        except requests.exceptions.Timeout:
+            print(f"Timeout Error with trials left {trials}\n")
+        trials+=1
+        time.sleep(2)
+    return None
+
+def get_soup(url):
+    try:
+        response = get_requests(url)
+        if response:
+            return BeautifulSoup(response.content, "html.parser")
+    except:
+        print("Something went wrong\n")
+    return None
+
+def morfi_Lagrange(inp,output):
+    if len(inp) != len(output):
+        print("Error")
+        return
+    n=len(inp)
+    synartiseis=np.ones((n,1),dtype=object)
+    x=symbols("x")
+    for i in range(n):
+        for j in range(n):
+            if j!=i:
+                synartiseis[i,0]*=(x-inp[j])/(inp[i]-inp[j])
+    synartisi=synartiseis[0,0]*output[0]
+    for i in range(1,n):
+        synartisi+=synartiseis[i,0]*output[i]
+    return x,synartisi
+
+#1ος τυπος Βαρυκεντρικης
+def prwti_Barykentriking(inp,output):
+    if len(inp) != len(output):
+        print("Error")
+        return
+    n=len(inp)
+    w=np.ones((n,1),dtype=float)
+    x = symbols("x")
+    for i in range(n):
+        for j in range(n):
+            if j!=i:
+                w[i,0]*=1/(inp[i]-inp[j])
+    l=1
+    for i in range(n):
+        l*=(x-inp[i])
+    synartisi=(w[0,0]*output[0])/(x-inp[0])
+    for i in range(1,n):
+        synartisi+=(w[i,0]*output[i])/(x-inp[i])
+    synartisi*=l
+    return x,synartisi
+
+#μορφη Newton
+def Newton(inp,output):
+    if len(inp) != len(output):
+        print("Error")
+        return
+    n=len(inp)
+    x=symbols("x")
+    times=np.ones((n,1),dtype=object)
+    for i in range(1,n):
+        times[i,0]=times[i-1,0]*(x-inp[i-1])
+    mitrwo = np.ones((n, n), dtype=float)
+    for i in range(n):
+        for j in range(i+1,n):
+            mitrwo[i,j]=0
+        for j in range(1,i+1):
+            mitrwo[i, j] = mitrwo[i, j-1] * (inp[i] - inp[j-1])
+    g=np.zeros((n,1),dtype=float)
+    for i in range(n):
+        temp=0
+        for j in range(i):
+            temp+=mitrwo[i,j]*g[j,0]
+        g[i,0]=(output[i]-temp)/mitrwo[i,i]
+    synartisi = 0
+    for i in range(n):
+        synartisi += times[i, 0] * g[i, 0]
+
+    return x,synartisi
+
+def Newton_Enhanced(inp,output):
+    if len(inp) != len(output):
+        print("Error")
+        return
+    n=len(inp)
+    x=symbols("x")
+    times = np.ones((n, 1), dtype=object)
+    for i in range(1, n):
+        times[i, 0] = times[i - 1, 0] * (x - inp[i - 1])
+    g = np.zeros((n, 1), dtype=object)
+    for i in range(n):
+        g[i, 0]=output[i]
+    for i in range(1,n):
+        for j in range(n-1,i-1,-1):
+            g[j,0]=(g[j,0]-g[j-1,0])/(inp[j]-inp[j-i])
+    synartisi = 0
+    for i in range(n):
+        synartisi += times[i, 0] * g[i, 0]
+    return x,synartisi
+
+def merge(left,right):
+    t=len(left)+len(right)
+    temp=[0]*t
+    i,j,k=0,0,0
+    while i < len(left) and j < len(right):
+        if left[i]<=right[j]:
+            temp[k]=left[i]
+            k+=1
+            i+=1
+        else:
+            temp[k]=right[j]
+            k+=1
+            j+=1
+
+    while i<len(left):
+        temp[k]=left[i]
+        k+=1
+        i+=1
+    while j<len(right):
+        temp[k]=right[j]
+        k+=1
+        j+=1
+    return temp
+
+def merge_sort(ar):
+    if len(ar)==0 or len(ar)==1:
+        return ar
+    mid=len(ar)//2
+    left=merge_sort([el for el in ar[:mid]])
+    right=merge_sort([el for el in ar[mid:]])
+    return merge(left,right)
+
+
+def quick_sort(ar):
+    if len(ar)==0 or len(ar)==1:
+        return ar
+    i,j=0,len(ar)-1
+    pivot_index=(i+j)//2
+    pivot=ar[pivot_index]
+    while i<=j:
+        while ar[i]<pivot:
+            i+=1
+        while ar[j]>pivot:
+            j-=1
+        if i<=j:
+          ar[i],ar[j]=ar[j],ar[i]
+          i+=1
+          j-=1
+    return quick_sort(ar[:i])+quick_sort(ar[i:])
+
+def give_hour(hours):
+    h=[]
+    for hour in hours:
+        h.append(hour[0:2])
+    hour="00"
+    while hour in h or int(hour)<0 or int(hour)>21:
+        hour=input("Please enter a valid hour: ").zfill(2)
+    return hour+":00"
+
+def give_date(days_of_month,months):
+    month=""
+    while month not in months:
+        month=input("Please enter a valid month: ")
+    full_days = max(days_of_month)
+
+    day = 0
+    while day < int(min(days_of_month)) or day >int(full_days):
+        day = int(input(f"Please enter a valid day ({min(days_of_month)}-{full_days}): "))
+    return month,str(day)
+
+def transform_hours(hours):
+    temp=[]
+    for hour in hours:
+        temp.append(int(hour[0:2]))
+    return temp
+
+def transform_temperatures(temperatures):
+    temp=[]
+    for tr in temperatures:
+        if tr=="-":
+            temp.append(0)
+        else:
+            temp.append(int(tr[0:2]))
+    return temp
+
+def transform_hyd(hyd):
+    temp=[]
+    for h in hyd:
+        if h=="-":
+            temp.append(0)
+        else:
+            temp.append(int(h[0:2]))
+    return temp
+
+def give_prediction_for_temp(df,hours,choice):
+    hours_int=transform_hours(hours)
+
+    days = df["ΘΕΣΗ"].tolist()
+    months = df["Μήνας"].tolist()
+    month,day=give_date(days,months)
+    temp=df.loc[df["ΘΕΣΗ"]==day]
+    temperatures_s=[]
+    for hour in hours:
+        temperatures_s.append(temp[hour])
+    temperatures=[]
+    for tr in temperatures_s:
+        for t in tr:
+            temperatures.append(t)
+    if choice==0:
+        temperatures = transform_temperatures(temperatures)
+    else:
+        temperatures = transform_hyd(temperatures)
+
+    start_time_Lagrance,finish_time_Lagrance,start_time_Barikentriki,finish_time_Barikentriki,start_time_Newton,finish_time_Newton,start_time_Newton_Enhanced,finish_time_Enhanced=[],[],[],[],[],[],[],[]
+    x_Langrance,x_Barikentriki,x_Newton,x_Newton_Enhanced=0,0,0,0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        for _ in range(10):
+            start_time_Lagrance.append(time.perf_counter())
+            f1 = executor.submit(morfi_Lagrange, hours_int, temperatures)
+            start_time_Barikentriki.append(time.perf_counter())
+            f2 = executor.submit(prwti_Barykentriking, hours_int, temperatures)
+            start_time_Newton.append(time.perf_counter())
+            f3 = executor.submit(Newton, hours_int, temperatures)
+            start_time_Newton_Enhanced.append(time.perf_counter())
+            f4 = executor.submit(Newton_Enhanced, hours_int, temperatures)
+
+        for _ in range(10):
+            x_Langrance,f1_Lagrance=f1.result()
+            finish_time_Lagrance.append(time.perf_counter())
+            x_Barikentriki,f2_Barikentriki=f2.result()
+            finish_time_Barikentriki.append(time.perf_counter())
+            x_Newton,f3_Newton=f3.result()
+            finish_time_Newton.append(time.perf_counter())
+            x_Newton_Enhanced,f4_Newton_Enhanced=f4.result()
+            finish_time_Enhanced.append(time.perf_counter())
+
+    time_Lagrance=(np.array(finish_time_Lagrance)-np.array(start_time_Lagrance)).mean()
+    time_Barikentriki=(np.array(finish_time_Barikentriki)-np.array(start_time_Barikentriki)).mean()
+    time_Newton=(np.array(finish_time_Newton)-np.array(start_time_Newton)).mean()
+    time_Enhanced=(np.array(finish_time_Enhanced)-np.array(start_time_Newton_Enhanced)).mean()
+
+    min_time=min(time_Lagrance,time_Barikentriki,time_Newton,time_Enhanced)
+
+    if min_time==time_Lagrance:
+        print(f"Minimum time Lagrance {min_time}")
+        return day,morfi_Lagrange(hours_int,temperatures)
+    elif min_time==time_Barikentriki:
+        print(f"Minimum time Barikentriki {min_time}")
+        return day,prwti_Barykentriking(hours_int,temperatures)
+    elif min_time==time_Newton:
+        print(f"Minimum time Newton {min_time}")
+        return day,Newton(hours_int,temperatures)
+    else:
+        print(f"Minimum time Newton Enhanced {min_time}")
+        return day,Newton_Enhanced(hours_int,temperatures)
+
+def save_csv(file_name,df,columns):
+    if ".csv" not in file_name:
+        print(f"No .csv found so we cannot save the dataframe to the {file_name}!")
+    else:
+        file_path = Path(file_name)
+        if file_path.is_file():
+            dt = pd.read_csv(file_name)
+            dt["ΘΕΣΗ"] = dt["ΘΕΣΗ"].astype(str).str.replace(".0", "", regex=False)
+            df["ΘΕΣΗ"] = df["ΘΕΣΗ"].astype(str).str.replace(".0", "", regex=False)
+            if dt.empty:
+                df.to_csv(file_name,index=False)
+            else:
+                for col in df.columns:
+                    if col not in dt.columns:
+                        dt[col] = "-"
+                row=[]
+                for index in df.index:
+                    if df["ΘΕΣΗ"][index] in dt["ΘΕΣΗ"].values:
+                        continue
+                    else:
+                        df_t=df.loc[[index]].copy()
+                        for col in df_t.columns:
+                            if col not in dt:
+                                dt[col]="-"
+                        for col in dt.columns:
+                            if col not in df_t:
+                                df_t[col] = "-"
+                        df_t=df_t[dt.columns]
+                        row.append(df_t)
+                if row:
+                    new_df=pd.concat(row,ignore_index=True)
+                    dt=pd.concat([dt,new_df],ignore_index=True)
+
+                old = dt.iloc[:, :3]
+                n = dt.iloc[:, 3:]
+                n = n.sort_index(axis=1)
+                dt = pd.concat([old, n], axis=1)
+
+                for index, day in df.iterrows():
+                    if day["ΘΕΣΗ"] in dt["ΘΕΣΗ"].values:
+                        for hour in df.columns[2:]:
+                            val = day[hour]
+                            if isinstance(val, pd.Series):
+                                val = val.iloc[-1]
+
+                            if str(val) != "-":
+                                dt.loc[dt["ΘΕΣΗ"] == day["ΘΕΣΗ"], hour] = str(val)
+                dt.to_csv(file_name, index=False)
+        else:
+            df.to_csv(file_name,index=False)
+
+
+def web_scrape(url):
+    soup = get_soup(url)
+    if soup:
+        print(f"All good")
+
+        pattern = re.compile(r"(\d+)")
+        days = []
+        for t in soup.find_all(class_="flleft")[0:7]:
+            text_content = t.get_text(strip=True)
+            days.append(pattern.split(text_content)[0])
+
+        dom = []
+        for t in soup.find_all(class_="dayNumbercf"):
+            text_content = t.get_text(strip=True)
+            dom.append(pattern.split(text_content)[1])
+
+        months = []
+        for t in soup.find_all(class_="monthNumbercf"):
+            text_content = t.get_text(strip=True)
+            month_match = pattern.search(text_content)
+            if month_match:
+                months.append(month_match.group(1))
+            else:
+                months.append(text_content)
+
+        times = []
+        for t in soup.find_all(class_="innerTableCell fulltime"):
+            times.append(t.get_text(strip=True))
+
+        pattern = soup.find(class_="celcius")
+        celcius = pattern.text
+        pattern = re.compile(celcius)
+        temperatures = []
+        hydrations = []
+        for t in soup.find_all(class_="innerTableCell temperature tempwidth"):
+            for a in t.find_all(class_="normal tempcolorcell"):
+                text_content = a.get_text(strip=True)
+                temperature, hyd = pattern.split(text_content, 1)
+                temperature += celcius
+                hyd = re.sub('υγρ.', '', hyd)
+                temperatures.append(temperature)
+                hydrations.append(hyd)
+            for a in t.find_all(class_="kafsonas tempcolorcell"):
+                text_content = a.get_text(strip=True)
+                temperature, hyd = pattern.split(text_content, 1)
+                temperature += celcius
+                hyd = re.sub('υγρ.', '', hyd)
+                temperatures.append(temperature)
+                hydrations.append(hyd)
+            for a in t.find_all(class_="kafsonas maxtemp tempcolorcell"):
+                text_content = a.get_text(strip=True)
+                temperature, hyd = pattern.split(text_content, 1)
+                temperature += celcius
+                hyd = re.sub('υγρ.', '', hyd)
+                temperatures.append(temperature)
+                hydrations.append(hyd)
+
+        temporary = []
+        for hyd in hydrations:
+            match = re.search(r"(\d+)%", hyd)
+            if match:
+                temporary.append(match.group(1) + "%")
+
+        hydrations = temporary.copy()
+        del temporary
+
+        pattern = re.compile(r"(\d+)")
+        winds = []
+        for t in soup.find_all(class_="innerTableCell anemosfull"):
+            text_content = t.get_text(strip=True)
+            wind = pattern.split(text_content)[1]
+            wind += " Μποφορ"
+            winds.append(wind)
+        return days,dom,months,times,temperatures,hydrations,winds,celcius
+    else:
+        print(f"Something went wrong")
+        return None,None,None,None,None,None,None,None
+
+def job(url,file_name1,file_name2):
+    days, dom, months, times, temperatures, hydrations, winds, celcius = web_scrape(url)
+    if days != None and dom != None and months != None and times != None and temperatures != None and hydrations != None and winds != None and celcius != None:
+        day_dictionary = {}
+        for day in days:
+            day_dictionary[day] = []
+
+        index = 0
+        for key in day_dictionary.keys():
+            while True:
+                if index > len(times) - 1:
+                    break
+                if day_dictionary[key] and day_dictionary[key][-1] == "21:00":
+                    break
+                day_dictionary[key].append(times[index])
+                index += 1
+
+        hours = []
+        for key in day_dictionary.keys():
+            if day_dictionary[key][0] == "00:00" and day_dictionary[key][-1] == "21:00":
+                hours = day_dictionary[key]
+                break
+
+        days_dictionary = {}
+        for day in day_dictionary.keys():
+            days_dictionary[day] = []
+
+        index = 0
+        for key in day_dictionary.keys():
+            for hour in hours:
+                if hour not in day_dictionary[key]:
+                    days_dictionary[key].append("-")
+                else:
+                    if index > len(temperatures) - 1:
+                        days_dictionary[key].append(temperatures[-1])
+                    else:
+                        days_dictionary[key].append(temperatures[index])
+                        index += 1
+        del index
+
+        df_temp = pd.DataFrame(days_dictionary)
+        df_temp.index = hours
+        df_reverse = df_temp.T
+        df_temp = df_reverse
+        times = []
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for i in range(len(df_temp)):
+            times.append(timestamp)
+        del df_reverse
+        df_temp.insert(0, "ΘΕΣΗ", dom)
+        df_temp.insert(1, "Μήνας", months)
+        df_temp.insert(2, "ΧΡΟΝΟΣ", times)
+        del timestamp, times
+
+        index = 0
+        for key in day_dictionary.keys():
+            an_index = 0
+            for hour in hours:
+                if hour not in day_dictionary[key]:
+                    days_dictionary[key][an_index] = "-"
+                    an_index += 1
+
+                else:
+                    if index > len(temperatures) - 1:
+                        days_dictionary[key][an_index] = hydrations[-1]
+                        an_index += 1
+                    else:
+                        days_dictionary[key][an_index] = hydrations[index]
+                        index += 1
+                        an_index += 1
+        del index
+
+        df_hyd = pd.DataFrame(days_dictionary)
+        del days_dictionary
+        df_hyd.index = hours
+        df_reverse = df_hyd.T
+        df_hyd = df_reverse
+        del df_reverse
+        times = []
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for i in range(len(df_temp)):
+            times.append(timestamp)
+        df_hyd.insert(0, "ΘΕΣΗ", dom)
+        df_hyd.insert(1, "Μήνας", months)
+        df_hyd.insert(2, "ΧΡΟΝΟΣ", times)
+
+        save_csv(file_name1, df_temp, hours)
+        save_csv(file_name2, df_hyd, hours)
+        return df_temp,df_hyd,hours,celcius
+
+def scheduling(url,file_name1,file_name2):
+    schedule.every().day.at("19:00").do(job,url,file_name1,file_name2)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+
+def find_min_and_max_temp(df, choice,day):
+    days = df["ΘΕΣΗ"].tolist()
+    months = df["Μήνας"].tolist()
+    temp = df.loc[df["ΘΕΣΗ"] == day]
+
+    temperatures_s = []
+    for hour in hours:
+        temperatures_s.append(temp[hour])
+
+    temperatures = []
+    for tr in temperatures_s:
+        for t in tr:
+            temperatures.append(t)
+
+    if choice == 0:
+        raw_values = transform_temperatures(temperatures)
+    else:
+        raw_values = transform_hyd(temperatures)
+
+    start_time_merge_sort,final_time_merge_sort,start_time_quick_sort,final_time_quick_sort=[]*10,[]*10,[]*10,[]*10
+    x_merge,x_quick=0,0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        for _ in range(10):
+            # Merge Sort Timing
+            s1 = time.perf_counter()
+            t1 = executor.submit(merge_sort, raw_values)
+            x_merge = t1.result()
+            f1 = time.perf_counter()
+            start_time_merge_sort.append(s1)
+            final_time_merge_sort.append(f1)
+
+            s2 = time.perf_counter()
+            t2 = executor.submit(quick_sort, raw_values)
+            x_quick = t2.result()
+            f2 = time.perf_counter()
+            start_time_quick_sort.append(s2)
+            final_time_quick_sort.append(f2)
+
+    time_merge = np.mean(np.array(final_time_merge_sort) - np.array(start_time_merge_sort))
+    time_quick = np.mean(np.array(final_time_quick_sort) - np.array(start_time_quick_sort))
+
+    if time_quick < time_merge:
+        print(f"Quick sort quicker with {time_quick} seconds")
+        return str(x_quick[0]),str(x_quick[-1])
+    else:
+        print(f"Merge sort quicker with {time_merge} seconds")
+        return str(x_merge[0]),str(x_merge[-1])
+
+
+file_name_temp = "temperatures.csv"
+
+file_name_hyd = "hydrations.csv"
+df_temp,df_hyd,hours,celcius = job(url,file_name_temp,file_name_hyd)
+thread1=threading.Thread(target=scheduling, args=(url,file_name_temp,file_name_hyd),daemon=True)
+thread1.start()
+
+try:
+    choice = -1
+    while choice < 0 or choice > 1:
+        choice = int(input("Please enter your choice(0-TEMPERATURE 1-HYDRATION): "))
+    if choice == 0:
+        day, (x, f) = give_prediction_for_temp(df_temp, hours, choice)
+        day = str(day)
+        h = give_hour(df_temp.columns[3:])
+        if h not in df_temp.columns:
+            df_temp[h] = "-"
+        print(str(math.ceil(f.subs(x, int(h[0:2])))) + celcius)
+        temporary_hours = df_temp.columns.tolist()
+        temporary_hours.append(h)
+        temporary_hours.sort()
+        ind = temporary_hours.index(h)
+        list_name = ["-"] * (len(df_temp["00:00"]))
+        df_temp.insert(ind, h, list_name, allow_duplicates=True)
+        df_temp.loc[df_temp["ΘΕΣΗ"] == day, h] = str(math.ceil(f.subs(x, int(h[0:2])))) + celcius
+        save_csv(file_name_temp, df_temp, hours)
+        minimum,maximum=find_min_and_max_temp(df_temp,choice,day)
+        print(f"The minimum temperature is {minimum}{celcius} and maximum temperature is {maximum}{celcius}")
+
+    else:
+        day, (x, f) = give_prediction_for_temp(df_hyd, hours, choice)
+        day = str(day)
+        h = give_hour(df_hyd.columns[3:])
+        if h not in df_hyd.columns:
+            df_temp[h] = "-"
+        print(str(math.ceil(f.subs(x, int(h[0:2])))) + "%")
+        temporary_hours = df_hyd.columns.tolist()
+        temporary_hours.append(h)
+        temporary_hours.sort()
+        ind = temporary_hours.index(h)
+        list_name = ["-"] * (len(df_temp["00:00"]))
+        df_hyd.insert(ind, h, list_name, allow_duplicates=True)
+        df_hyd.loc[df_hyd["ΘΕΣΗ"] == day, h] = str(math.ceil(f.subs(x, int(h[0:2])))) + "%"
+        save_csv(file_name_hyd, df_hyd, hours)
+        minimum, maximum = find_min_and_max_temp(df_hyd,choice,day)
+        print(f"The minimum hydration is {minimum}% and maximum hydration is {maximum}%")
+except (KeyboardInterrupt, ValueError):
+    print("\nΠαραλείφθηκε η αλληλεπίδραση χρήστη.")
+
+while True:
+    time.sleep(60)
+
+
+
+
